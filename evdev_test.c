@@ -57,6 +57,7 @@ static int test_raw = 0;
 static int test_composite = 0;
 static int event_num = 2000;
 static int dump_event_flag = 0;
+static int evdev_inject = 0;
 
 struct timespec ns_to_timespec(const int64_t nsecs)
 {
@@ -225,7 +226,7 @@ void sigusr_handle(int sig)
 		child_exited = 1;
 }
 
-void run_parent_task(int fd, pid_t pid)
+void run_parent_task(int fd)
 {
 	char linkpath[255] = { 0 }, filepath[255] = { 0 };
 	struct input_event ev_legacy[10] = { 0 };
@@ -241,7 +242,6 @@ void run_parent_task(int fd, pid_t pid)
 	sprintf(linkpath, "/proc/self/fd/%d", fd);
 	if(readlink(linkpath, filepath, 255) < 0)
 		err(1, "readlink %s failed", linkpath);
-	close(fd);
 
 	if (test_legacy) {
 		/*
@@ -334,8 +334,24 @@ void run_parent_task(int fd, pid_t pid)
 
 void run_child_task(int fd)
 {
-	int count = 0;
-	struct input_event ev;
+	int count = 0, size;
+	struct input_event ev_legacy[3] = {
+		{ .type = EV_REL, .code = REL_X },
+		{ .type = EV_REL, .code = REL_Y },
+		{ .type = EV_SYN, .code = SYN_REPORT }
+	};
+	struct input_value ev_raw[3] = {
+		{ .type = EV_REL, .code = REL_X },
+		{ .type = EV_REL, .code = REL_Y },
+		{ .type = EV_SYN, .code = SYN_REPORT }
+	};
+	struct input_composite_event ev_comp[3] = {
+		{ .v.type = EV_REL, .v.code = REL_X },
+		{ .v.type = EV_REL, .v.code = REL_Y },
+		{ .v.type = EV_SYN, .v.code = SYN_REPORT }
+	};
+	void *ev;
+	int if_type;
 
 	if (fd < 0)
 		return;
@@ -343,25 +359,48 @@ void run_child_task(int fd)
 	srand(time(NULL));
 
 	while (count++ < event_num) {
-		memset(&ev, 0, sizeof(ev));
-		ev.type = EV_REL;
-		ev.code = REL_X;
-		ev.value = count + 1;
-		if (write(fd, &ev, sizeof(ev)) < 0)
-			warn("uinput: write event error");
+		if (evdev_inject) {
+			switch (rand() % 3) {
+			case 0:
+				ev = ev_legacy;
+				size = sizeof(ev_legacy);
+				ev_legacy[0].value = count + 1;
+				ev_legacy[1].value = count + 2;
+				ev_legacy[2].value = 0;
+				if_type = EVDEV_LEGACY;
+				if (ioctl(fd, EVIOCSIFTYPE, &if_type) < 0)
+					warn("evdev ioctl evdev_legacy failed");
+				break;
+			case 1:
+				ev = ev_raw;
+				size = sizeof(ev_raw);
+				ev_raw[0].value = count + 1;
+				ev_raw[1].value = count + 2;
+				ev_raw[2].value = 0;
+				if_type = EVDEV_RAW;
+				if (ioctl(fd, EVIOCSIFTYPE, &if_type) < 0)
+					warn("evdev ioctl evdev_raw failed");
+				break;
+			case 2:
+				ev = ev_comp;
+				size = sizeof(ev_comp);
+				ev_comp[0].v.value = count + 1;
+				ev_comp[1].v.value = count + 2;
+				ev_comp[2].v.value = 0;
+				if_type = EVDEV_COMPOSITE;
+				if (ioctl(fd, EVIOCSIFTYPE, &if_type) < 0)
+					warn("evdev ioctl evdev_comp failed");
+				break;
+			}
+		} else {
+			ev = ev_legacy;
+			size = sizeof(ev_legacy);
+			ev_legacy[0].value = count + 1;
+			ev_legacy[1].value = count + 2;
+			ev_legacy[2].value = 0;
+		}
 
-		memset(&ev, 0, sizeof(ev));
-		ev.type = EV_REL;
-		ev.code = REL_Y;
-		ev.value = count + 2;
-		if (write(fd, &ev, sizeof(ev)) < 0)
-			warn("uinput: write event error");
-
-		memset(&ev, 0, sizeof(ev));
-		ev.type = EV_SYN;
-		ev.code = SYN_REPORT;
-		ev.value = 0;
-		if (write(fd, &ev, sizeof(ev)) < 0)
+		if (write(fd, ev, size) < 0)
 			warn("uinput: write event error");
 
 		usleep(rand() % 100);
@@ -385,15 +424,17 @@ int main(int argc, char *argv[])
 			test_composite = 1;
 		else if (!strncmp(argv[i], "-d", 2))
 			dump_event_flag = 1;
+		else if (!strncmp(argv[i], "-i", 2))
+			evdev_inject = 1;
 		else if (!strncmp(argv[i], "-n", 2))
 			event_num = atoi(argv[++i]);
 		else
 			fprintf(stderr, "illegal option %s\n", argv[i]);
 	}
 
-	printf("Options: legacy %d, raw, %d, composite %d, dump %d, evnum %d\n",
+	printf("Options: legacy %d, raw, %d, composite %d, inject %d, dump %d, evnum %d\n",
 			test_legacy, test_raw, test_composite,
-			dump_event_flag, event_num);
+			evdev_inject, dump_event_flag, event_num);
 
 	fd = open(UINPUT_PATH, O_WRONLY | O_NONBLOCK);
 	if (fd < 0)
@@ -428,10 +469,13 @@ int main(int argc, char *argv[])
 
 	pid = fork();
 	if (pid > 0) {
-		run_parent_task(evdev_fd, pid);
+		run_parent_task(evdev_fd);
 	} else if (pid == 0) {
 		sleep(2); // wait for parent poll ready
-		run_child_task(fd);
+		if (evdev_inject)
+			run_child_task(evdev_fd);
+		else
+			run_child_task(fd);
 		kill(getppid(), SIGUSR1);
 		_exit(0);
 	} else
@@ -446,6 +490,7 @@ int main(int argc, char *argv[])
 	printf("Composite evdev: REL_X %d, REL_Y %d, EV_SYN %d, timestamp %d\n",
 			rel_x_cnt[2], rel_y_cnt[2], syn_cnt[2], timestamp_cnt);
 
+	close(evdev_fd);
 	if(ioctl(fd, UI_DEV_DESTROY) < 0)
 		err(1, "uinput: destroy device failed");
 
