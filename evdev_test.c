@@ -78,6 +78,31 @@ int timespec_compare(const struct timespec *lhs, const struct timespec *rhs)
 	return lhs->tv_nsec - rhs->tv_nsec;
 }
 
+void show_usage(void)
+{
+	printf("evtest - tool to test new evdev interface\n");
+	printf("Usage: evtest [-i] [-l] [-r] [-c] [-d] [-n NUM] [-h]\n");
+	printf("\t-i: write event via evdev, default uinput\n");
+	printf("\t-l: test legacy evdev interface, default false\n");
+	printf("\t-r: test raw evdev interface, default false\n");
+	printf("\t-c: test composite evdev interface, default false\n");
+	printf("\t-d: dump test events, default false\n");
+	printf("\t-n NUM: specify test event number, default 2000\n");
+	printf("\t-h: show this help\n");
+}
+
+void show_statistic(void)
+{
+	printf("Result:\n");
+	printf("Total event sent: %d\n", event_num * 3);
+	printf("Legacy evdev: REL_X %d, REL_Y %d, EV_SYN %d\n",
+			rel_x_cnt[0], rel_y_cnt[0], syn_cnt[0]);
+	printf("Raw evdev: REL_X %d, REL_Y %d, EV_SYN %d\n",
+			rel_x_cnt[1], rel_y_cnt[1], syn_cnt[1]);
+	printf("Composite evdev: REL_X %d, REL_Y %d, EV_SYN %d, timestamp %d\n",
+			rel_x_cnt[2], rel_y_cnt[2], syn_cnt[2], timestamp_cnt);
+}
+
 int find_evdev_device(char *name)
 {
 	char devpath[255] = { 0 };
@@ -428,7 +453,10 @@ int main(int argc, char *argv[])
 			evdev_inject = 1;
 		else if (!strncmp(argv[i], "-n", 2))
 			event_num = atoi(argv[++i]);
-		else
+		else if (!strncmp(argv[i], "-h", 2)) {
+			show_usage();
+			exit(0);
+		} else
 			fprintf(stderr, "illegal option %s\n", argv[i]);
 	}
 
@@ -471,7 +499,7 @@ int main(int argc, char *argv[])
 	if (pid > 0) {
 		run_parent_task(evdev_fd);
 	} else if (pid == 0) {
-		sleep(2); // wait for parent poll ready
+		sleep(1); // wait for parent poll ready
 		if (evdev_inject)
 			run_child_task(evdev_fd);
 		else
@@ -481,14 +509,7 @@ int main(int argc, char *argv[])
 	} else
 		err(1, "fork error");
 
-	printf("Result:\n");
-	printf("Total event sent: %d\n", event_num * 3);
-	printf("Legacy evdev: REL_X %d, REL_Y %d, EV_SYN %d\n",
-			rel_x_cnt[0], rel_y_cnt[0], syn_cnt[0]);
-	printf("Raw evdev: REL_X %d, REL_Y %d, EV_SYN %d\n",
-			rel_x_cnt[1], rel_y_cnt[1], syn_cnt[1]);
-	printf("Composite evdev: REL_X %d, REL_Y %d, EV_SYN %d, timestamp %d\n",
-			rel_x_cnt[2], rel_y_cnt[2], syn_cnt[2], timestamp_cnt);
+	show_statistic();
 
 	close(evdev_fd);
 	if(ioctl(fd, UI_DEV_DESTROY) < 0)
